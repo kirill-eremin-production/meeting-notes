@@ -296,13 +296,9 @@
 
                 const data = await response.json();
 
-                progress.style.display = 'none';
-
-                if (data.success) {
-                    result.classList.remove('error');
-                    result.style.display = 'block';
-                    result.querySelector('h3').textContent = '✅ Результат транскрибации';
-                    resultText.textContent = data.data.transcript;
+                if (data.success && data.transcriptionId) {
+                    // Редирект на страницу статуса транскрибации
+                    window.location.href = `/transcription/${data.transcriptionId}`;
                 } else {
                     throw new Error(data.message || 'Ошибка транскрибации');
                 }
@@ -312,7 +308,6 @@
                 result.style.display = 'block';
                 result.querySelector('h3').textContent = '❌ Ошибка';
                 resultText.textContent = error.message;
-            } finally {
                 uploadBtn.disabled = false;
             }
         });

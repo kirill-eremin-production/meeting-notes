@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MulterModule } from '@nestjs/platform-express';
 import { TranscriptionController } from './transcription.controller';
 import { TranscriptionService } from './transcription.service';
+import { FileTranscriptionRepository } from './file-transcription.repository';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 
@@ -39,6 +40,12 @@ import { extname } from 'path';
     }),
   ],
   controllers: [TranscriptionController],
-  providers: [TranscriptionService],
+  providers: [
+    TranscriptionService,
+    {
+      provide: 'TRANSCRIPTION_REPOSITORY',
+      useClass: FileTranscriptionRepository,
+    },
+  ],
 })
 export class TranscriptionModule {}

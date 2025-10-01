@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Статус транскрибации</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 700px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .status-card {
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .progress-bar-container {
+            background: #e0e0e0;
+            border-radius: 10px;
+            height: 20px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .current-text-box {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #555;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .current-text-label {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+        }
+
+        .status-processing {
+            background: #d1ecf1;
+            border-left-color: #17a2b8;
+        }
+
+        .status-completed {
+            background: #d4edda;
+            border-left-color: #28a745;
+        }
+
+        .status-error {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+
+        .status-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .status-icon {
+            font-size: 24px;
+        }
+
+        .status-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .status-message {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        .file-info {
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .file-info strong {
+            color: #333;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: #667eea;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .result {
+            display: none;
+            padding: 20px;
+            background: #f8f9ff;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+            margin-top: 20px;
+        }
+
+        .result.show {
+            display: block;
+        }
+
+        .result h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .result-text {
+            color: #555;
+            line-height: 1.8;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            padding: 15px;
+            background: white;
+            border-radius: 5px;
+        }
+
+        .error-text {
+            color: #dc3545;
+            background: #fff5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .not-found {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .timestamps {
+            font-size: 12px;
+            color: #999;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Статус транскрибации</h1>
+        <p class="subtitle" id="subtitle">Загрузка информации...</p>
+
+        <div id="content">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p style="margin-top: 15px; color: #666;">Загрузка статуса...</p>
+            </div>
+        </div>
+
+        <a href="/" class="btn">← Вернуться на главную</a>
+    </div>
+
+    <script>
+        const transcriptionId = window.location.pathname.split('/').pop();
+        let pollInterval = null;
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch(`/transcription/${transcriptionId}/status`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    showNotFound();
+                    return;
+                }
+
+                updateUI(data.data);
+
+                // Если статус не финальный, продолжаем опрашивать
+                if (data.data.status === 'pending' || data.data.status === 'processing') {
+                    if (!pollInterval) {
+                        pollInterval = setInterval(fetchStatus, 1000); // опрос каждую секунду для плавного прогресса
+                    }
+                } else {
+                    // Транскрибация завершена или ошибка - прекращаем опрос
+                    if (pollInterval) {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                }
+            } catch (error) {
+                console.error('Ошибка получения статуса:', error);
+                showError('Не удалось получить статус транскрибации');
+            }
+        }
+
+        function updateUI(transcription) {
+            const subtitle = document.getElementById('subtitle');
+            const content = document.getElementById('content');
+
+            subtitle.textContent = `ID: ${transcription.id}`;
+
+            let statusIcon, statusTitle, statusMessage, statusClass;
+
+            switch (transcription.status) {
+                case 'pending':
+                    statusIcon = '⏳';
+                    statusTitle = 'Ожидание';
+                    statusMessage = 'Транскрибация находится в очереди';
+                    statusClass = 'status-pending';
+                    break;
+                case 'processing':
+                    statusIcon = '🔄';
+                    statusTitle = 'Обработка';
+                    statusMessage = 'Файл обрабатывается... Это может занять несколько минут';
+                    statusClass = 'status-processing';
+                    break;
+                case 'completed':
+                    statusIcon = '✅';
+                    statusTitle = 'Завершено';
+                    statusMessage = 'Транскрибация успешно завершена';
+                    statusClass = 'status-completed';
+                    break;
+                case 'error':
+                    statusIcon = '❌';
+                    statusTitle = 'Ошибка';
+                    statusMessage = 'Произошла ошибка при обработке файла';
+                    statusClass = 'status-error';
+                    break;
+            }
+
+            const createdAt = new Date(transcription.createdAt).toLocaleString('ru-RU');
+            const completedAt = transcription.completedAt 
+                ? new Date(transcription.completedAt).toLocaleString('ru-RU')
+                : null;
+
+            content.innerHTML = `
+                <div class="file-info">
+                    <strong>Файл:</strong> ${transcription.filename}
+                </div>
+
+                <div class="status-card ${statusClass}">
+                    <div class="status-header">
+                        <span class="status-icon">${statusIcon}</span>
+                        <span class="status-title">${statusTitle}</span>
+                        ${transcription.status === 'processing' ? '<span class="spinner"></span>' : ''}
+                    </div>
+                    <div class="status-message">${statusMessage}</div>
+                    
+                    ${transcription.status === 'processing' && transcription.progress !== undefined ? `
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-fill" style="width: ${transcription.progress}%">
+                                ${transcription.progress}%
+                            </div>
+                        </div>
+                        ${transcription.currentText ? `
+                            <div class="current-text-label">Распознанный текст:</div>
+                            <div class="current-text-box">${transcription.currentText}</div>
+                        ` : ''}
+                    ` : ''}
+                    
+                    <div class="timestamps">
+                        Создано: ${createdAt}
+                        ${completedAt ? `<br>Завершено: ${completedAt}` : ''}
+                    </div>
+                </div>
+
+                ${transcription.status === 'completed' && transcription.transcript ? `
+                    <div class="result show">
+                        <h3>📝 Результат транскрибации</h3>
+                        <div class="result-text">${transcription.transcript}</div>
+                    </div>
+                ` : ''}
+
+                ${transcription.status === 'error' && transcription.error ? `
+                    <div class="error-text">
+                        <strong>Детали ошибки:</strong><br>
+                        ${transcription.error}
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        function showNotFound() {
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <div class="not-found">
+                    <h2>❌ Транскрибация не найдена</h2>
+                    <p style="margin-top: 10px;">Проверьте правильность ссылки</p>
+                </div>
+            `;
+        }
+
+        function showError(message) {
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <div class="not-found">
+                    <h2>❌ Ошибка</h2>
+                    <p style="margin-top: 10px;">${message}</p>
+                </div>
+            `;
+        }
+
+        // Начинаем опрос при загрузке страницы
+        fetchStatus();
+
+        // Очищаем интервал при закрытии страницы
+        window.addEventListener('beforeunload', () => {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+            }
+        });
+    </script>
+</body>
+</html>

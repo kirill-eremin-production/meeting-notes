@@ -1,11 +1,95 @@
 #!/usr/bin/env python3
 """
 Скрипт транскрибации аудио/видео файлов с помощью Whisper
+С поддержкой прогресса в реальном времени
 """
 
 import sys
+import json
 import whisper
 from pathlib import Path
+from tqdm import tqdm as original_tqdm
+
+# Импортируем модуль whisper.transcribe для патчинга
+try:
+    import whisper.transcribe as whisper_transcribe_module
+    HAS_WHISPER_TRANSCRIBE = True
+except (ImportError, AttributeError):
+    HAS_WHISPER_TRANSCRIBE = False
+
+
+# Глобальная переменная для отслеживания текущего прогресса
+current_progress_data = {
+    "progress": 0,
+    "current_text": "",
+    "accumulated_segments": []
+}
+
+
+def print_progress(progress_percent: int, current_text: str = ""):
+    """
+    Выводит прогресс в JSON формате для парсинга Node.js
+    
+    Args:
+        progress_percent: Прогресс в процентах (0-100)
+        current_text: Текущий распознанный текст
+    """
+    current_progress_data["progress"] = progress_percent
+    current_progress_data["current_text"] = current_text
+    
+    progress_data = {
+        "type": "progress",
+        "progress": progress_percent,
+        "currentText": current_text
+    }
+    print(json.dumps(progress_data), flush=True)
+
+
+class TqdmProgress(original_tqdm):
+    """
+    Кастомный класс tqdm для перехвата прогресса Whisper
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._last_reported_progress = 0
+    
+    def update(self, n=1):
+        """Переопределяем update для отправки прогресса"""
+        result = super().update(n)
+        
+        if self.total and self.total > 0:
+            # Рассчитываем прогресс (30% уже использовано для загрузки, 70% для транскрибации)
+            whisper_progress = (self.n / self.total) * 100
+            overall_progress = 30 + int(whisper_progress * 0.60)
+            
+            # Отправляем обновление только если прогресс изменился минимум на 1%
+            if overall_progress - self._last_reported_progress >= 1:
+                # Берем накопленный текст из сегментов
+                accumulated_text = " ".join(current_progress_data["accumulated_segments"])
+                if not accumulated_text:
+                    accumulated_text = f"Обработано {self.n:,} из {self.total:,} фреймов ({int(whisper_progress)}%)"
+                
+                print_progress(
+                    overall_progress,
+                    accumulated_text
+                )
+                self._last_reported_progress = overall_progress
+        
+        return result
+
+
+def create_segment_callback():
+    """
+    Создает callback для перехвата сегментов Whisper
+    """
+    def write_segment(segment_text, *args, **kwargs):
+        """Перехватывает вывод сегментов"""
+        if segment_text and isinstance(segment_text, str):
+            text = segment_text.strip()
+            if text and not text.startswith('['):  # Игнорируем временные метки
+                current_progress_data["accumulated_segments"].append(text)
+    
+    return write_segment
 
 
 def transcribe_file(input_file: str, output_file: str, model_size: str = "small"):
@@ -22,54 +106,101 @@ def transcribe_file(input_file: str, output_file: str, model_size: str = "small"
     if not input_path.exists():
         raise FileNotFoundError(f"Входной файл не найден: {input_file}")
     
-    print(f"📁 Входной файл: {input_path.name}")
-    print(f"📝 Выходной файл: {output_file}")
-    print(f"🤖 Модель: {model_size}")
-    print()
+    print_progress(0, "Инициализация...")
     
     # Загружаем модель Whisper
-    print("⏳ Загружаю модель Whisper...")
+    print_progress(10, "Загрузка модели Whisper...")
     model = whisper.load_model(model_size)
-    print("✅ Модель загружена")
-    print()
+    print_progress(20, "Модель загружена")
     
-    # Транскрибируем файл
-    print("🎙️  Начинаю транскрибацию...")
-    result = model.transcribe(str(input_path))
+    # Транскрибируем файл с отслеживанием прогресса
+    print_progress(30, "Начинаю транскрибацию...")
     
-    # Извлекаем текст и метаданные
+    # Сбрасываем накопленные сегменты
+    current_progress_data["accumulated_segments"] = []
+    
+    # Многоуровневый monkey-patch для надежного перехвата прогресса
+    patches = []
+    
+    # 1. Патчим sys.modules['tqdm']
+    if 'tqdm' in sys.modules:
+        original_sys_tqdm = sys.modules['tqdm'].tqdm
+        sys.modules['tqdm'].tqdm = TqdmProgress
+        patches.append(('sys_modules', original_sys_tqdm))
+    
+    # 2. Патчим whisper.transcribe.tqdm напрямую
+    if HAS_WHISPER_TRANSCRIBE and hasattr(whisper_transcribe_module, 'tqdm'):
+        original_whisper_tqdm = whisper_transcribe_module.tqdm
+        whisper_transcribe_module.tqdm = TqdmProgress
+        patches.append(('whisper_transcribe', original_whisper_tqdm))
+    
+    # 3. Патчим функцию вывода сегментов для получения промежуточного текста
+    original_print = None
+    if HAS_WHISPER_TRANSCRIBE and hasattr(whisper_transcribe_module, 'print'):
+        original_print = whisper_transcribe_module.print
+        
+        def custom_print(*args, **kwargs):
+            """Перехватываем print для получения сегментов"""
+            # Вызываем оригинальный print, но не выводим (file=None блокирует вывод)
+            text = ' '.join(str(arg) for arg in args)
+            if text and not text.startswith('[') and len(text) > 3:
+                # Это похоже на текст сегмента
+                current_progress_data["accumulated_segments"].append(text.strip())
+        
+        whisper_transcribe_module.print = custom_print
+        patches.append(('print', original_print))
+    
+    try:
+        # Используем verbose=True для получения сегментов
+        result = model.transcribe(
+            str(input_path),
+            verbose=True,
+            language='ru'
+        )
+    finally:
+        # Восстанавливаем все патчи в обратном порядке
+        for patch_type, original_value in reversed(patches):
+            if patch_type == 'sys_modules':
+                sys.modules['tqdm'].tqdm = original_value
+            elif patch_type == 'whisper_transcribe':
+                whisper_transcribe_module.tqdm = original_value
+            elif patch_type == 'print':
+                whisper_transcribe_module.print = original_value
+    
+    # Извлекаем финальный текст и метаданные
     text = result.get("text", "").strip()
     language = result.get("language", "unknown")
     
     if not text:
         raise ValueError("Не удалось получить текст из файла")
     
+    print_progress(90, text)
+    
     # Сохраняем результат
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     
-    print(f"✅ Транскрибация завершена!")
-    print(f"📊 Статистика:")
-    print(f"   - Язык: {language}")
-    print(f"   - Символов: {len(text)}")
-    print(f"   - Файл сохранён: {output_path.absolute()}")
+    print_progress(100, text)
+    
+    # Финальное сообщение
+    final_data = {
+        "type": "complete",
+        "language": language,
+        "length": len(text),
+        "text": text
+    }
+    print(json.dumps(final_data), flush=True)
 
 
 def main():
     """Точка входа скрипта"""
     if len(sys.argv) < 3:
-        print("❌ Недостаточно аргументов")
-        print()
-        print("Использование:")
-        print("  python3 script.py <входной_файл> <выходной_файл> [размер_модели]")
-        print()
-        print("Примеры:")
-        print("  python3 script.py rec.m4a transcript.txt")
-        print("  python3 script.py video.mp4 output.txt medium")
-        print()
-        print("Размеры модели: tiny, base, small, medium, large")
-        print("По умолчанию: medium")
+        error_data = {
+            "type": "error",
+            "message": "Недостаточно аргументов"
+        }
+        print(json.dumps(error_data), file=sys.stderr)
         sys.exit(1)
     
     input_file = sys.argv[1]
@@ -79,7 +210,11 @@ def main():
     try:
         transcribe_file(input_file, output_file, model_size)
     except Exception as error:
-        print(f"\n❌ Ошибка: {error}", file=sys.stderr)
+        error_data = {
+            "type": "error",
+            "message": str(error)
+        }
+        print(json.dumps(error_data), file=sys.stderr)
         sys.exit(1)
 
 
