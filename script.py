@@ -67,7 +67,7 @@ class TqdmProgress(original_tqdm):
                 # Берем накопленный текст из сегментов
                 accumulated_text = " ".join(current_progress_data["accumulated_segments"])
                 if not accumulated_text:
-                    accumulated_text = f"Обработано {self.n:,} из {self.total:,} фреймов ({int(whisper_progress)}%)"
+                    accumulated_text = f"Транскрибация: {int(whisper_progress)}%"
                 
                 print_progress(
                     overall_progress,
@@ -76,23 +76,23 @@ class TqdmProgress(original_tqdm):
                 self._last_reported_progress = overall_progress
         
         return result
-
-
-def create_segment_callback():
-    """
-    Создает callback для перехвата сегментов Whisper
-    """
-    def write_segment(segment_text, *args, **kwargs):
-        """Перехватывает вывод сегментов"""
-        if segment_text and isinstance(segment_text, str):
-            text = segment_text.strip()
-            if text and not text.startswith('['):  # Игнорируем временные метки
-                current_progress_data["accumulated_segments"].append(text)
     
-    return write_segment
+    def close(self):
+        """Переопределяем close для финального обновления после tqdm"""
+        # Отправляем финальный прогресс только если еще не отправили 90%
+        if self._last_reported_progress < 90:
+            accumulated_text = " ".join(current_progress_data["accumulated_segments"])
+            if not accumulated_text:
+                accumulated_text = "Завершение транскрибации..."
+            
+            print_progress(90, accumulated_text)
+            self._last_reported_progress = 90
+        
+        result = super().close()
+        return result
 
 
-def transcribe_file(input_file: str, output_file: str, model_size: str = "small"):
+def transcribe_file(input_file: str, output_file: str, model_size: str = "large"):
     """
     Транскрибирует аудио/видео файл с помощью Whisper
     
@@ -134,27 +134,15 @@ def transcribe_file(input_file: str, output_file: str, model_size: str = "small"
         whisper_transcribe_module.tqdm = TqdmProgress
         patches.append(('whisper_transcribe', original_whisper_tqdm))
     
-    # 3. Патчим функцию вывода сегментов для получения промежуточного текста
-    original_print = None
-    if HAS_WHISPER_TRANSCRIBE and hasattr(whisper_transcribe_module, 'print'):
-        original_print = whisper_transcribe_module.print
-        
-        def custom_print(*args, **kwargs):
-            """Перехватываем print для получения сегментов"""
-            # Вызываем оригинальный print, но не выводим (file=None блокирует вывод)
-            text = ' '.join(str(arg) for arg in args)
-            if text and not text.startswith('[') and len(text) > 3:
-                # Это похоже на текст сегмента
-                current_progress_data["accumulated_segments"].append(text.strip())
-        
-        whisper_transcribe_module.print = custom_print
-        patches.append(('print', original_print))
+    # 3. Патчим вывод для перехвата сегментов (упрощенная версия)
+    # Используем callback через итерацию по сегментам в результате
+    # вместо сложного перехвата stdout
     
     try:
-        # Используем verbose=True для получения сегментов
+        # Используем verbose=False чтобы не мешать нашему прогрессу
         result = model.transcribe(
             str(input_path),
-            verbose=True,
+            verbose=False,
             language='ru'
         )
     finally:
@@ -164,17 +152,29 @@ def transcribe_file(input_file: str, output_file: str, model_size: str = "small"
                 sys.modules['tqdm'].tqdm = original_value
             elif patch_type == 'whisper_transcribe':
                 whisper_transcribe_module.tqdm = original_value
-            elif patch_type == 'print':
-                whisper_transcribe_module.print = original_value
+    
+    # СТРАХОВКА: Гарантируем что достигли 90% после транскрибации
+    if current_progress_data["progress"] < 90:
+        print_progress(90, "Завершение транскрибации...")
     
     # Извлекаем финальный текст и метаданные
     text = result.get("text", "").strip()
     language = result.get("language", "unknown")
+    segments = result.get("segments", [])
     
     if not text:
         raise ValueError("Не удалось получить текст из файла")
     
-    print_progress(90, text)
+    # Показываем превью из сегментов
+    if segments:
+        # Берем текст из первых сегментов для показа прогресса
+        preview_segments = segments[:min(3, len(segments))]
+        preview_text = " ".join(seg.get("text", "").strip() for seg in preview_segments)
+        if preview_text:
+            print_progress(92, preview_text + "...")
+    
+    # Показываем начало финального текста
+    print_progress(95, text[:300] + ("..." if len(text) > 300 else ""))
     
     # Сохраняем результат
     output_path = Path(output_file)
@@ -205,7 +205,7 @@ def main():
     
     input_file = sys.argv[1]
     output_file = sys.argv[2]
-    model_size = sys.argv[3] if len(sys.argv) > 3 else "small"
+    model_size = sys.argv[3] if len(sys.argv) > 3 else "large"
     
     try:
         transcribe_file(input_file, output_file, model_size)
